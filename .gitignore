@@ -1,0 +1,4 @@
+mod*/
+*.pyc
+__pycache__
+
