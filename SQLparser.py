@@ -5,23 +5,7 @@ transform SQL text format to internal representation
 
 import re, os
 from settings import RUNNER, DATABASE 
-
-def execSQL(SQLcmd):
-    stream = os.popen(f"{RUNNER} {DATABASE} -c \"{SQLcmd}\"")
-    result = stream.read()
-    headings = result.split("\n")[0].split()
-    content = "\n".join(result.split("\n")[1:])
-    return result
-
-def getTableOid(tableName):
-    SQLTemplate = f"""
-    SELECT relname, oid FROM pg_class
-    WHERE relname='{tableName}';
-    """
-    rawRes = execSQL(SQLTemplate)
-    oid = re.search(rf'{tableName}\s+\|\s+(\d+)', rawRes).group(1)
-      
-    return oid
+from utils import replaceAliasesInJoinConds, getJoinTblName, getColumns
 
 def SQLQueryToAliases(query):
     """
@@ -70,44 +54,23 @@ def SQLQueryToJoinConds(query):
     joinCondReg = fr"({joinTblRegExp}\.\w+ = {joinTblRegExp}\.\w+)"
     
     joinConds = re.findall(joinCondReg, query)
-    joinConds = [i[0] for i in joinConds]
+    resConds = []
+    oldJoinConds = []
+    for joinCond in joinConds:
+        oldJoinCond = joinCond[0]
+        joinCond = replaceAliasesInJoinConds(joinCond[0], aliases) 
+        resConds.append(joinCond)
+        oldJoinConds.append(oldJoinCond)
 
-    return(joinConds)
+    return resConds, oldJoinConds
 
-def replaceAliasesInJoinConds(join,aliases):
-    """
-    modify join condition and replace aliases with tableNames
-    """
-    joinTbls = join.split()
-    joinTbls = sorted([joinTbls[0], joinTbls[-1]])
-
-    joinFields = ", ".join(joinTbls)
-    joinAliases = [i.split(".")[0] for i in joinTbls]
-    joinTbls = [aliases[i.split(".")[0]] for i in joinTbls]
-
-    columns = joinFields.split(",")
-    columns = [i.strip() for i in columns]
-    columns = [i+" AS "+i.replace(".","_") for i in columns]
-    columns = ", ".join(columns)
-
-    return(joinTbls, joinAliases, columns)
-
-def getOidedTableName(tblName):
-    print(tblName)
-    return 't' + getTableOid(tblName.split(".")[0])+"."+tblName.split(".")[-1]
 
 def getTableDDL(joinCond):
-    columns = sorted(joinCond.split(" = "))
-    tbl_names = [getOidedTableName(col) for col in columns]
-    table_name = "_EQ_".join(tbl_names)
-    table_name = table_name.replace(".","__")
-    joinTbls = [i.split(".")[0] for i in columns]
-    columns = [i.strip() for i in columns]
-    aliases = [getOidedTableName(col).replace(".","_") for col in columns]
-    columns = [i + " AS " + alias for i, alias in zip(columns, aliases)]
-    columns = ", ".join(columns)
+    table_name = getJoinTblName(joinCond)
+    joinTbls = re.search(r'(\w+).\w+ = (\w+).\w+', joinCond)
+    joinTbls = [joinTbls.group(1), joinTbls.group(2)]
+    columns = getColumns(joinCond)
 
-    
     SQLTemplate = f"""
     DROP TABLE IF EXISTS {table_name};
     CREATE TABLE {table_name}

@@ -9,7 +9,8 @@ Currently available transformations:
 import os
 import re
 from workload import queries, getGlobJoinConds
-from SQLparser import getTableDDL, execSQL, SQLQueryToAliases, SQLQueryToJoinConds, getTableOid, getOidedTableName
+from SQLparser import getTableDDL, SQLQueryToJoinConds, SQLQueryToAliases
+from utils import execSQL, getJoinTblName, getFields, replaceGlobalNameInJoinConds
 from settings import OUT
 
 def createTables():
@@ -23,17 +24,9 @@ def createTables():
 
 def updateWorkload():
     for file, query in queries():
-        fileName = file.split(".")[0]
-        
         aliases = SQLQueryToAliases(query)
-        joinConds = SQLQueryToJoinConds(query)
-        existsTbls = re.search(
-                r"(?s)FROM(.+)WHERE", 
-                query
-                ).group(1).split(',')
-        existsTbls = {tbl.strip('\n ,') for tbl in existsTbls}
-        
-        for joinCond in joinConds:
+        joinConds, oldJoinConds = SQLQueryToJoinConds(query)
+        for joinCond, oldCond in zip(joinConds, oldJoinConds):
             # join looks like: 
             # a.id = b.a_id
             #
@@ -51,18 +44,12 @@ def updateWorkload():
             # 3. Replace "=" with that long line
 
             # localJoinCond -> joinCond
-            oldCond = joinCond
-            condition = sorted(joinCond.split(" = "))
-            # condition = [aliases[i.split(".")[0]]+"."+i.split(".")[-1] for i in condition]
-            # joinFieldsList = [i.replace('.','_') for i in condition]
-            joinFieldsList = ["t" + getTableOid(aliases[i.split('.')[0]]) + '_' + i.split('.')[1] for i in condition]
-
+            
+            joinTblName = getJoinTblName(joinCond) 
+            joinFieldsList = getFields(joinCond)
+            joinCond = replaceGlobalNameInJoinConds(joinCond, aliases)
             newJoinCond = joinCond.split(" = ")
-
-            columns = sorted(joinCond.split(" = "))
-            columns = ['t' + getTableOid(aliases[i.split(".")[0]])+"."+i.split(".")[-1] for i in columns]
-            joinTblName = "_EQ_".join(columns)
-            joinTblName = joinTblName.replace(".","__")
+            
 
             newJoinCond[0] += f" = {joinTblName}"
             newJoinCond[0] += f".{joinFieldsList[0]}"
@@ -71,20 +58,13 @@ def updateWorkload():
             newJoinCond = "\n  AND ".join(newJoinCond)
             newJoinCond = newJoinCond.replace(",","")
             
-            # print('old:', oldCond)
-            # print('new:', newJoinCond)
             query = query.replace(oldCond, newJoinCond)
+            query = query.replace("FROM",f"FROM\n  {joinTblName},")
 
-            if joinTblName not in existsTbls:
-                query = query.replace("FROM",f"FROM\n  {joinTblName},")
-
-        ext = ".sql"
-        fileName += "_mod." + ext
         print(file) # this is needed for sence of progress
-
         with open(f"{OUT}/{file}","w") as f:
             f.write(query)
-
+    
 if __name__=="__main__":
     createTables()
     updateWorkload()
